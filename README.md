@@ -1,5 +1,10 @@
 # Simple SW Inlets
 
+[![License](https://img.shields.io/github/license/stoiver/Simple_SW_Inlets)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3-blue.svg)](https://www.python.org/)
+[![Built with ANUGA](https://img.shields.io/badge/built%20with-ANUGA-1f6feb.svg)](https://github.com/anuga-community/anuga_core)
+[![Tests](https://img.shields.io/badge/tests-pytest-0a9edc.svg)](test_inlet_operator_integration.py)
+
 A small ANUGA hydrodynamic experiment that models stormwater inlets
 (pits / grates / lintels) capturing water from a 2-D shallow-water surface
 flow, plus a Tkinter GUI for inspecting the resulting hydrographs.

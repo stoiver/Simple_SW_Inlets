@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 from anuga.structures.inlet_operator import Inlet_operator
 
+USE_MAX_DEPTH = True  # If False, uses average depth instead of max depth for capture calculations.
+
 # ==========================================
 # 1. CORE STORMWATER ASSET LIBRARY CLASSES
 # ==========================================
@@ -60,6 +62,7 @@ class Depth_driven_inlet_operator(Inlet_operator):
         self.d_trans = self.transition_depth(A, P, self.C_w, self.C_o, self.g)
 
         self.capture_log = capture_log
+        self.total_volume_inflow = 0.0
         self.total_volume_captured = 0.0
         self.total_volume_bypassed = 0.0
 
@@ -98,7 +101,12 @@ class Depth_driven_inlet_operator(Inlet_operator):
 
         t is unused: Q depends on the current ponded depth, not on time.
         """
-        depth = self.inlet.get_average_depth()
+        if USE_MAX_DEPTH:
+            depths = self.inlet.get_depths()
+            depth = np.max(depths) if len(depths) > 0 else 0.0
+        else:
+            depth = self.inlet.get_average_depth()
+
         A = self.spec.operational_area
         P = self.spec.operational_perimeter
         return -self.capture_discharge(depth, A, P, self.C_w, self.C_o,
@@ -112,7 +120,11 @@ class Depth_driven_inlet_operator(Inlet_operator):
             return
 
         dt = self.domain.get_timestep()
-        depth = self.inlet.get_average_depth()
+        if USE_MAX_DEPTH:
+            depths = self.inlet.get_depths()
+            depth = np.max(depths) if len(depths) > 0 else 0.0
+        else:
+            depth = self.inlet.get_average_depth()
 
         # applied_Q is negative for extraction; report the realised capture as positive.
         captured_Q = max(0.0, -self.applied_Q)
@@ -127,6 +139,7 @@ class Depth_driven_inlet_operator(Inlet_operator):
 
         bypass_Q = max(0.0, Q_approach - captured_Q)
 
+        self.total_volume_inflow += Q_approach * dt
         self.total_volume_captured += captured_Q * dt
         self.total_volume_bypassed += bypass_Q * dt
 
@@ -136,6 +149,7 @@ class Depth_driven_inlet_operator(Inlet_operator):
             "Approach_Q_cms": Q_approach,
             "Captured_Q_cms": captured_Q,
             "Bypass_Q_cms": bypass_Q,
+            "Cum_Inflow_m3": self.total_volume_inflow,
             "Cum_Captured_m3": self.total_volume_captured,
             "Cum_Bypassed_m3": self.total_volume_bypassed
         })
@@ -248,11 +262,16 @@ def build_network(domain, pit_placements=PIT_PLACEMENTS):
 
 def print_summary(network, pit_placements=PIT_PLACEMENTS, write_csv=True):
     """Print the steady-state results table and optionally dump per-inlet CSVs."""
-    print("\n" + "="*70)
-    print(f"{'STORMWATER INLET EXPERIMENT RESULTS SUMMARY':^70}")
-    print("="*70)
-    print(f"{'Asset ID':<18} | {'Type':<15} | {'Depth (m)':<9} | {'Q_In (L/s)':<10} | {'Bypass (L/s)'}")
-    print("-"*70)
+    header = (f"{'Asset ID':<18} | {'Type':<15} | {'Depth (m)':<9} | "
+              f"{'Q_In (L/s)':<10} | {'Bypass (L/s)':<12} | "
+              f"{'Cum_Captured (m3)':<17} | {'Cum_Inflow (m3)'}")
+    width = len(header)
+
+    print("\n" + "="*width)
+    print(f"{'STORMWATER INLET EXPERIMENT RESULTS SUMMARY':^{width}}")
+    print("="*width)
+    print(header)
+    print("-"*width)
 
     for pit in pit_placements:
         asset_id = pit["id"]
@@ -264,15 +283,19 @@ def print_summary(network, pit_placements=PIT_PLACEMENTS, write_csv=True):
             depth = final_row["Depth_m"]
             q_cap_lps = final_row["Captured_Q_cms"] * 1000.0  # Convert to Litres/sec
             q_byp_lps = final_row["Bypass_Q_cms"] * 1000.0   # Convert to Litres/sec
+            cum_captured = final_row["Cum_Captured_m3"]       # Total volume swallowed (m3)
+            cum_inflow = final_row["Cum_Inflow_m3"]           # Total volume that reached the inlet (m3)
 
-            print(f"{asset_id:<18} | {pit['spec']:<15} | {depth:9.3f} | {q_cap_lps:10.1f} | {q_byp_lps:11.1f}")
+            print(f"{asset_id:<18} | {pit['spec']:<15} | {depth:9.3f} | "
+                  f"{q_cap_lps:10.1f} | {q_byp_lps:12.1f} | "
+                  f"{cum_captured:17.2f} | {cum_inflow:.2f}")
 
             if write_csv:
                 # Save out to CSV cleanly
                 filename = f"hydrograph_{asset_id}.csv"
                 df.to_csv(filename, index=False)
 
-    print("="*70)
+    print("="*width)
     if write_csv:
         print("Individual hydrograph log CSVs have been saved to your workspace.")
 
@@ -286,6 +309,7 @@ def run_experiment(yieldstep=10, finaltime=120, write_csv=True):
     # Run for `finaltime` seconds to allow conditions to stabilise across the slope
     for t in domain.evolve(yieldstep=yieldstep, finaltime=finaltime):
         print(f"Simulation Time: {t:.1f}s")
+        domain.report_water_volume_statistics()
 
     print_summary(network, write_csv=write_csv)
     return network

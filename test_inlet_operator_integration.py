@@ -24,7 +24,7 @@ import pytest
 
 import anuga
 
-import py_ANUGA_Simple_SW_WORKING as sim
+import stormwater_inlet_simulation as sim
 
 OP = sim.Depth_driven_inlet_operator
 # HEC-22 metric coefficients (the operator defaults); asserting against these
@@ -40,6 +40,7 @@ def build_pond(initial_depth, side=SIDE, n=10):
     """Flat, frictionless square pond of uniform depth with closed walls."""
     domain = anuga.rectangular_cross_domain(n, n, len1=side, len2=side)
     domain.set_name("inlet_integration_test")
+    domain.set_store(False)                  # don't leave a .sww artifact behind
     domain.set_quantity("elevation", 0.0)
     domain.set_quantity("friction", 0.0)
     domain.set_quantity("stage", initial_depth)   # flat bed => uniform depth

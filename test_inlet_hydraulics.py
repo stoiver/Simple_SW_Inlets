@@ -1,4 +1,4 @@
-"""Unit tests for the importable parts of py_ANUGA_Simple_SW_WORKING.
+"""Unit tests for the importable parts of stormwater_inlet_simulation.
 
 These exercise the pure asset/hydraulics logic and the CSV-contract columns
 without building a live ANUGA domain, so they run fast. Importing the module
@@ -15,7 +15,7 @@ import math
 
 import pytest
 
-import py_ANUGA_Simple_SW_WORKING as sim
+import stormwater_inlet_simulation as sim
 
 OP = sim.Depth_driven_inlet_operator
 C_W, C_O, G = 1.66, 0.67, 9.81

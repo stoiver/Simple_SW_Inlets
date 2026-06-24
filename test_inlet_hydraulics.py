@@ -125,7 +125,7 @@ def test_specs_have_positive_geometry(key):
 
 CSV_COLUMNS = ["Asset_ID", "Time_s", "Depth_m", "Approach_Q_cms",
                "Captured_Q_cms", "Bypass_Q_cms",
-               "Cum_Captured_m3", "Cum_Bypassed_m3"]
+               "Cum_Inflow_m3", "Cum_Captured_m3", "Cum_Bypassed_m3"]
 
 
 def test_unknown_spec_raises_keyerror():
@@ -146,7 +146,7 @@ def test_to_dataframe_matches_csv_contract():
     net.logs["Pit_A"] = [{
         "Time_s": 10.0, "Depth_m": 0.3, "Approach_Q_cms": 0.5,
         "Captured_Q_cms": 0.2, "Bypass_Q_cms": 0.3,
-        "Cum_Captured_m3": 2.0, "Cum_Bypassed_m3": 3.0,
+        "Cum_Inflow_m3": 5.0, "Cum_Captured_m3": 2.0, "Cum_Bypassed_m3": 3.0,
     }]
     df = net.to_dataframe("Pit_A")
     assert list(df.columns) == CSV_COLUMNS

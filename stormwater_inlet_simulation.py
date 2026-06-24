@@ -16,6 +16,11 @@ except Exception:
     Parallel_Inlet_operator = object
     _HAVE_PARALLEL = False
 
+# Drive the capture law from the max ponded depth over the inlet footprint (True)
+# or the region-averaged depth (False). Max is more representative when the inlet
+# sits in a local depression; both agree for a uniform pond.
+USE_MAX_DEPTH = True
+
 # ==========================================
 # 1. CORE STORMWATER ASSET LIBRARY CLASSES
 # ==========================================
@@ -69,6 +74,7 @@ class _Depth_driven_capture_mixin:
         self.d_trans = self.transition_depth(A, P, self.C_w, self.C_o, self.g)
 
         self.capture_log = capture_log
+        self.total_volume_inflow = 0.0
         self.total_volume_captured = 0.0
         self.total_volume_bypassed = 0.0
 
@@ -124,6 +130,7 @@ class _Depth_driven_capture_mixin:
         Q_approach = specific_discharge * width
         bypass_Q = max(0.0, Q_approach - captured_Q)
 
+        self.total_volume_inflow += Q_approach * dt
         self.total_volume_captured += captured_Q * dt
         self.total_volume_bypassed += bypass_Q * dt
 
@@ -133,6 +140,7 @@ class _Depth_driven_capture_mixin:
             "Approach_Q_cms": Q_approach,
             "Captured_Q_cms": captured_Q,
             "Bypass_Q_cms": bypass_Q,
+            "Cum_Inflow_m3": self.total_volume_inflow,
             "Cum_Captured_m3": self.total_volume_captured,
             "Cum_Bypassed_m3": self.total_volume_bypassed
         })
@@ -155,16 +163,24 @@ class Depth_driven_inlet_operator(_Depth_driven_capture_mixin, Inlet_operator):
         Inlet_operator.__init__(self, domain, region, Q=0.0, label=label, **kwargs)
         self._init_capture(spec, C_w, C_o, capture_log)
 
+    def _sample_depth(self):
+        """Ponded depth driving the capture law: max over the footprint if
+        USE_MAX_DEPTH, else the region average."""
+        if USE_MAX_DEPTH:
+            depths = self.inlet.get_depths()
+            return float(np.max(depths)) if len(depths) > 0 else 0.0
+        return self.inlet.get_average_depth()
+
     def update_Q(self, t):
         """Capture discharge from the current ponded depth (t unused)."""
-        return self._capture_Q(self.inlet.get_average_depth())
+        return self._capture_Q(self._sample_depth())
 
     def __call__(self):
         # Parent applies the discharge (with mass-balance clamping) and sets applied_Q.
         Inlet_operator.__call__(self)
         if self.capture_log is None:
             return
-        self._log_capture(self.inlet.get_average_depth(),
+        self._log_capture(self._sample_depth(),
                           self.inlet.get_average_xmom(),
                           self.inlet.get_average_ymom(),
                           self.inlet.get_area(),
@@ -199,13 +215,26 @@ class Depth_driven_parallel_inlet_operator(_Depth_driven_capture_mixin,
         self._init_capture(spec, C_w, C_o, capture_log)
         self._global_depth = 0.0
 
+    def _sample_global_depth(self):
+        """Global ponded depth across all ranks holding the inlet (collective).
+
+        Honors USE_MAX_DEPTH via an MPI max-reduction of each rank's local max,
+        else uses the global average. Must be entered by every rank.
+        """
+        if USE_MAX_DEPTH:
+            from mpi4py import MPI
+            depths = self.inlet.get_depths()
+            local_max = float(np.max(depths)) if len(depths) > 0 else 0.0
+            return float(MPI.COMM_WORLD.allreduce(local_max, op=MPI.MAX))
+        return self.inlet.get_global_average_depth()
+
     def update_Q(self, t):
         # Master-only; uses the global depth gathered collectively in __call__.
         return self._capture_Q(self._global_depth)
 
     def __call__(self):
         # Collective: every rank must enter this so the reduction completes.
-        self._global_depth = self.inlet.get_global_average_depth()
+        self._global_depth = self._sample_global_depth()
         # Master computes Q via update_Q and broadcasts the volume to the others.
         Parallel_Inlet_operator.__call__(self)
 
@@ -342,11 +371,16 @@ def build_network(domain, pit_placements=PIT_PLACEMENTS):
 
 def print_summary(network, pit_placements=PIT_PLACEMENTS, write_csv=True):
     """Print the steady-state results table and optionally dump per-inlet CSVs."""
-    print("\n" + "="*70)
-    print(f"{'STORMWATER INLET EXPERIMENT RESULTS SUMMARY':^70}")
-    print("="*70)
-    print(f"{'Asset ID':<18} | {'Type':<15} | {'Depth (m)':<9} | {'Q_In (L/s)':<10} | {'Bypass (L/s)'}")
-    print("-"*70)
+    header = (f"{'Asset ID':<18} | {'Type':<15} | {'Depth (m)':<9} | "
+              f"{'Q_In (L/s)':<10} | {'Bypass (L/s)':<12} | "
+              f"{'Cum_Captured (m3)':<17} | {'Cum_Inflow (m3)'}")
+    width = len(header)
+
+    print("\n" + "="*width)
+    print(f"{'STORMWATER INLET EXPERIMENT RESULTS SUMMARY':^{width}}")
+    print("="*width)
+    print(header)
+    print("-"*width)
 
     for pit in pit_placements:
         asset_id = pit["id"]
@@ -358,15 +392,19 @@ def print_summary(network, pit_placements=PIT_PLACEMENTS, write_csv=True):
             depth = final_row["Depth_m"]
             q_cap_lps = final_row["Captured_Q_cms"] * 1000.0  # Convert to Litres/sec
             q_byp_lps = final_row["Bypass_Q_cms"] * 1000.0   # Convert to Litres/sec
+            cum_captured = final_row["Cum_Captured_m3"]       # Total volume swallowed (m3)
+            cum_inflow = final_row["Cum_Inflow_m3"]           # Total volume that reached the inlet (m3)
 
-            print(f"{asset_id:<18} | {pit['spec']:<15} | {depth:9.3f} | {q_cap_lps:10.1f} | {q_byp_lps:11.1f}")
+            print(f"{asset_id:<18} | {pit['spec']:<15} | {depth:9.3f} | "
+                  f"{q_cap_lps:10.1f} | {q_byp_lps:12.1f} | "
+                  f"{cum_captured:17.2f} | {cum_inflow:.2f}")
 
             if write_csv:
                 # Save out to CSV cleanly
                 filename = f"hydrograph_{asset_id}.csv"
                 df.to_csv(filename, index=False)
 
-    print("="*70)
+    print("="*width)
     if write_csv:
         print("Individual hydrograph log CSVs have been saved to your workspace.")
 
@@ -380,6 +418,7 @@ def run_experiment(yieldstep=10, finaltime=120, write_csv=True):
     # Run for `finaltime` seconds to allow conditions to stabilise across the slope
     for t in domain.evolve(yieldstep=yieldstep, finaltime=finaltime):
         print(f"Simulation Time: {t:.1f}s")
+        domain.report_water_volume_statistics()
 
     print_summary(network, write_csv=write_csv)
     return network

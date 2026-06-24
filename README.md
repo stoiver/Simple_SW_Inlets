@@ -171,11 +171,13 @@ Both scripts depend on this exact column set, written by the operator's capture
 log and validated by the viewer's `required_headers`:
 
 ```
-Time_s, Depth_m, Approach_Q_cms, Captured_Q_cms, Bypass_Q_cms, Cum_Captured_m3, Cum_Bypassed_m3
+Time_s, Depth_m, Approach_Q_cms, Captured_Q_cms, Bypass_Q_cms, Cum_Inflow_m3, Cum_Captured_m3, Cum_Bypassed_m3
 ```
 
 Flows are stored in m³/s (cms) and converted to L/s only at display time.
-The exported per-inlet DataFrame additionally prepends an `Asset_ID` column.
+The exported per-inlet DataFrame additionally prepends an `Asset_ID` column. The
+viewer requires only the original seven columns (it ignores the extra
+`Cum_Inflow_m3`), so it still opens older CSVs.
 
 > If you rename a column in the simulation, update `required_headers` in
 > `stormwater_inlet_viewer.py` or the GUI will reject the file.

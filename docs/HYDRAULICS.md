@@ -6,10 +6,10 @@ an inlet captures, and the basis for the equations and coefficients.
 ## Overview
 
 Each inlet captures water as a function of the **ponded depth** `d` over the
-inlet. By default (`USE_MAX_DEPTH = True`) `d` is the maximum depth over the
-inlet footprint; set the flag False to use ANUGA's region average
-(`inlet.get_average_depth()`) instead. A grate / pit in a sag captures water in
-two regimes:
+inlet. The operator's `use_max_depth` argument (default True, from the module
+`USE_MAX_DEPTH` constant) selects whether `d` is the maximum depth over the inlet
+footprint or ANUGA's region average (`inlet.get_average_depth()`). A grate / pit
+in a sag captures water in two regimes:
 
 - **Weir flow** at shallow depths — water spills over the *perimeter* of the
   opening.

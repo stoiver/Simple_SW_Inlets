@@ -69,6 +69,22 @@ def pond():
 
 
 # --------------------------------------------------------------------------- #
+# use_max_depth is a per-operator argument (not a hard-wired global)           #
+# --------------------------------------------------------------------------- #
+
+def test_use_max_depth_argument_flows_to_operator(pond):
+    pond.set_quantity("stage", 0.30)
+    net = sim.Stormwater_inlet_network(pond)
+    op_default = net.add_inlet("d", CENTER[0], CENTER[1], "Grate_600x600", radius=RADIUS)
+    op_avg = net.add_inlet("a", CENTER[0], CENTER[1], "Grate_600x600",
+                           radius=RADIUS, use_max_depth=False)
+    assert op_default.use_max_depth is True          # default from USE_MAX_DEPTH
+    assert op_avg.use_max_depth is False             # per-inlet override honored
+    # On a uniform pond max == average, so both sample the same depth.
+    assert op_default._sample_depth() == pytest.approx(op_avg._sample_depth())
+
+
+# --------------------------------------------------------------------------- #
 # update_Q matches the weir/orifice law with the grate's area & perimeter      #
 # --------------------------------------------------------------------------- #
 

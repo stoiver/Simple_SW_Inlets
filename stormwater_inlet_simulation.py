@@ -21,9 +21,11 @@ except Exception:
     Parallel_Inlet_operator = object
     _HAVE_PARALLEL = False
 
-# Drive the capture law from the max ponded depth over the inlet footprint (True)
-# or the region-averaged depth (False). Max is more representative when the inlet
-# sits in a local depression; both agree for a uniform pond.
+# Default for the operators' `use_max_depth` argument: drive the capture law from
+# the max ponded depth over the inlet footprint (True) or the region-averaged
+# depth (False). Max is more representative when the inlet sits in a local
+# depression; both agree for a uniform pond. Override per inlet via the operator
+# / add_inlet argument; this constant only sets the default.
 USE_MAX_DEPTH = True
 
 # ==========================================
@@ -127,11 +129,12 @@ class _Depth_driven_capture_mixin:
     per-subdomain (local) in serial, globally reduced across ranks in parallel.
     """
 
-    def _init_capture(self, spec, C_w, C_o, capture_log):
+    def _init_capture(self, spec, C_w, C_o, capture_log, use_max_depth=USE_MAX_DEPTH):
         self.spec = spec
         self.C_w = C_w
         self.C_o = C_o
         self.g = 9.81
+        self.use_max_depth = use_max_depth
 
         # Pre-calculate the weir->orifice transition depth (where both laws agree)
         A = self.spec.operational_area
@@ -224,14 +227,15 @@ class Depth_driven_inlet_operator(_Depth_driven_capture_mixin, Inlet_operator):
     a distributed domain use Depth_driven_parallel_inlet_operator instead.
     """
     def __init__(self, domain, region, spec, capture_log=None,
-                 C_w=1.66, C_o=0.67, label=None, **kwargs):
+                 C_w=1.66, C_o=0.67, label=None, use_max_depth=USE_MAX_DEPTH,
+                 **kwargs):
         Inlet_operator.__init__(self, domain, region, Q=0.0, label=label, **kwargs)
-        self._init_capture(spec, C_w, C_o, capture_log)
+        self._init_capture(spec, C_w, C_o, capture_log, use_max_depth)
 
     def _sample_depth(self):
         """Ponded depth driving the capture law: max over the footprint if
-        USE_MAX_DEPTH, else the region average."""
-        if USE_MAX_DEPTH:
+        self.use_max_depth, else the region average."""
+        if self.use_max_depth:
             depths = self.inlet.get_depths()
             return float(np.max(depths)) if len(depths) > 0 else 0.0
         return self.inlet.get_average_depth()
@@ -274,19 +278,20 @@ class Depth_driven_parallel_inlet_operator(_Depth_driven_capture_mixin,
     ANUGA's parallel-inlet conventions.
     """
     def __init__(self, domain, region, spec, capture_log=None,
-                 C_w=1.66, C_o=0.67, label=None, **kwargs):
+                 C_w=1.66, C_o=0.67, label=None, use_max_depth=USE_MAX_DEPTH,
+                 **kwargs):
         Parallel_Inlet_operator.__init__(self, domain, region, Q=0.0,
                                          label=label, **kwargs)
-        self._init_capture(spec, C_w, C_o, capture_log)
+        self._init_capture(spec, C_w, C_o, capture_log, use_max_depth)
         self._global_depth = 0.0
 
     def _sample_global_depth(self):
         """Global ponded depth across all ranks holding the inlet (collective).
 
-        Honors USE_MAX_DEPTH via an MPI max-reduction of each rank's local max,
-        else uses the global average. Must be entered by every rank.
+        Honors self.use_max_depth via an MPI max-reduction of each rank's local
+        max, else uses the global average. Must be entered by every rank.
         """
-        if USE_MAX_DEPTH:
+        if self.use_max_depth:
             from mpi4py import MPI
             depths = self.inlet.get_depths()
             local_max = float(np.max(depths)) if len(depths) > 0 else 0.0
@@ -326,7 +331,7 @@ class Stormwater_inlet_network:
         self.logs = {}
 
     def add_inlet(self, asset_id, x, y, spec_key, blockage_factor=0.0, radius=1.5,
-                  **operator_kwargs):
+                  use_max_depth=USE_MAX_DEPTH, **operator_kwargs):
         if spec_key not in self.library:
             raise KeyError(f"Asset spec '{spec_key}' not found.")
 
@@ -351,7 +356,7 @@ class Stormwater_inlet_network:
         self.logs[asset_id] = []
         operator = operator_cls(self.domain, region, spec,
                                 capture_log=self.logs[asset_id], label=asset_id,
-                                **operator_kwargs)
+                                use_max_depth=use_max_depth, **operator_kwargs)
         self.inlets[asset_id] = operator
         return operator
 
@@ -439,7 +444,8 @@ def build_network(domain, pit_placements=PIT_PLACEMENTS, library=None):
     for pit in pit_placements:
         network.add_inlet(pit["id"], pit["x"], pit["y"], pit["spec"],
                           blockage_factor=pit.get("blockage", 0.0),
-                          radius=pit.get("radius", 1.5))
+                          radius=pit.get("radius", 1.5),
+                          use_max_depth=pit.get("use_max_depth", USE_MAX_DEPTH))
     print(f"Registered {len(network.inlets)} distinct configurations in path line.")
     return network
 

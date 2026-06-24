@@ -2,8 +2,9 @@
 # Load with:  python stormwater_inlet_simulation.py --placements config/pit_placements.toml
 #
 # One [[pits]] table per inlet. Required: id, x, y, spec (must match a key in the
-# inlet library). Optional: radius (footprint radius m, default 1.5) and
-# blockage (0.0 = clear .. 1.0 = fully blocked, default 0.0).
+# inlet library). Optional: radius (footprint radius m, default 1.5),
+# blockage (0.0 = clear .. 1.0 = fully blocked, default 0.0), and
+# use_max_depth (true = drive capture from max footprint depth, false = average).
 
 [[pits]]
 id = "Pit_01_SmallGrate"

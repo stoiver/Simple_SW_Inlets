@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An ANUGA hydrodynamic experiment that models stormwater inlets (pits/grates/lintels) on a sloping surface-flow plane, plus a Tkinter GUI for inspecting the resulting hydrographs.
 
-- `stormwater_inlets.py` — the reusable **toolkit/library**: inlet spec + catalogue, TOML loaders, the depth-driven capture operators (serial + MPI), and the inlet network manager. No experiment-specific setup; imported by the simulation script and the tests.
+- `stormwater_inlets.py` — the reusable **toolkit/library**: inlet spec + catalogue, TOML loaders, the depth-driven capture operators (serial + MPI), the inlet network manager, and generic `build_network`/`print_summary` helpers. No experiment-specific setup; imported by the simulation script and the tests.
 - `stormwater_inlet_simulation.py` — a runnable, follow-along **experiment script** built on the toolkit: defines the specific domain (`build_domain`) and `PIT_PLACEMENTS`, evolves, and writes one `hydrograph_<Asset_ID>.csv` per inlet plus `sloped_inlet_experiment.sww`.
 - `stormwater_inlet_viewer.py` — standalone Tkinter dashboard that scans a folder for those CSVs and renders the diagnostic plots.
 
@@ -43,8 +43,10 @@ The hydraulics live in an asset-library + operator design (all reusable, no expe
 
 Config can come from TOML instead of the built-in defaults: `load_inlet_library(path)` (in the toolkit) returns a `{name: Inlet_specification}` catalogue from `[inlets.<name>]` tables (quote names containing `.`, e.g. `[inlets."Lintel_1.2m"]`, or TOML reads them as nested tables), and `load_pit_placements(path)` returns a list of placement dicts from `[[pits]]` tables (required `id/x/y/spec`, optional `radius/blockage`). `Stormwater_inlet_network(domain, library=...)` accepts a loaded catalogue; the simulation script's `run_experiment(library_path=, placements_path=)` and the `--library/--placements` CLI flags wire them in. Example files live in `config/` and mirror the built-ins.
 
+The toolkit also provides two generic helpers (used by the simulation script): `build_network(domain, pit_placements, library=None)` loops the placements calling `add_inlet` (reading optional `radius`/`blockage`/`use_max_depth` per pit), and `print_summary(network, pit_placements, write_csv=True)` prints the steady-state table — including an all-asset TOTAL row (captured & inflow volumes + capture %) — and optionally dumps the per-inlet CSVs.
+
 ### Simulation script (`stormwater_inlet_simulation.py`)
-A slim, follow-along experiment on top of the toolkit (`import stormwater_inlets as si`): `build_domain()` (the specific 100×20 m sloped domain), the `PIT_PLACEMENTS` list, plus `build_network`/`print_summary`/`run_experiment` and the argparse CLI. Holds no class definitions — those live in the toolkit — so it reads top-to-bottom as a usage example.
+A slim, follow-along experiment on top of the toolkit (`import stormwater_inlets as si`): `build_domain()` (the specific 100×20 m sloped domain), the `PIT_PLACEMENTS` list, and `run_experiment()` + the argparse CLI (which call `si.build_network`/`si.print_summary`). Holds no class definitions or generic helpers — those live in the toolkit — so it reads top-to-bottom as a usage example.
 
 Runtime flow (under `if __name__ == "__main__"`, via `run_experiment()`): `build_domain()` makes a 100×20 m domain via `create_domain_from_regions`, sets a 1% slope elevation, dry initial stage, Dirichlet inflow on `left`, Transmissive `right`, Reflective walls; `build_network()` places the 6 `PIT_PLACEMENTS` down the channel centerline (each entry takes an optional per-asset `blockage` 0.0–1.0, default 0.0, passed through to `add_inlet`/`Inlet_specification`); `domain.evolve(yieldstep=10, finaltime=120)`; then `print_summary()` prints a table and dumps per-inlet CSVs.
 

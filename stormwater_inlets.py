@@ -377,3 +377,65 @@ class Stormwater_inlet_network:
         df = pd.DataFrame(self.logs[asset_id])
         df.insert(0, "Asset_ID", asset_id)
         return df
+
+
+# ==========================================
+# 2. NETWORK BUILD + REPORTING HELPERS
+# ==========================================
+
+def build_network(domain, pit_placements, library=None):
+    """Register a list of pit placements onto the domain and return the network.
+
+    Each placement is a dict with required `id/x/y/spec` and optional
+    `radius`/`blockage`/`use_max_depth` (see load_pit_placements). `library`
+    defaults to the built-in INLET_LIBRARY.
+    """
+    network = Stormwater_inlet_network(domain, library=library)
+    for pit in pit_placements:
+        network.add_inlet(pit["id"], pit["x"], pit["y"], pit["spec"],
+                          blockage_factor=pit.get("blockage", 0.0),
+                          radius=pit.get("radius", 1.5),
+                          use_max_depth=pit.get("use_max_depth", USE_MAX_DEPTH))
+    print(f"Registered {len(network.inlets)} inlets.")
+    return network
+
+
+def print_summary(network, pit_placements, write_csv=True):
+    """Print the steady-state results table (with an all-asset total) and
+    optionally dump per-inlet CSVs."""
+    header = (f"{'Asset ID':<18} | {'Type':<15} | {'Block':<5} | {'Depth (m)':<9} | "
+              f"{'Q_In (L/s)':<10} | {'Bypass (L/s)':<12} | "
+              f"{'Cum_Captured (m3)':<17} | {'Cum_Inflow (m3)'}")
+    width = len(header)
+
+    print("\n" + "=" * width)
+    print(f"{'STORMWATER INLET EXPERIMENT RESULTS SUMMARY':^{width}}")
+    print("=" * width)
+    print(header)
+    print("-" * width)
+
+    total_captured = 0.0
+    total_inflow = 0.0
+    for pit in pit_placements:
+        df = network.to_dataframe(pit["id"])
+        if df.empty:
+            continue
+        final = df.iloc[-1]   # steady-state final row
+        total_captured += final["Cum_Captured_m3"]
+        total_inflow += final["Cum_Inflow_m3"]
+        print(f"{pit['id']:<18} | {pit['spec']:<15} | {pit.get('blockage', 0.0):5.2f} | "
+              f"{final['Depth_m']:9.3f} | {final['Captured_Q_cms'] * 1000.0:10.1f} | "
+              f"{final['Bypass_Q_cms'] * 1000.0:12.1f} | "
+              f"{final['Cum_Captured_m3']:17.2f} | {final['Cum_Inflow_m3']:.2f}")
+        if write_csv:
+            df.to_csv(f"hydrograph_{pit['id']}.csv", index=False)
+
+    # Totals across all assets, aligned under the two cumulative-volume columns.
+    print("-" * width)
+    capture_pct = (100.0 * total_captured / total_inflow) if total_inflow > 0 else 0.0
+    label = f"TOTAL ({capture_pct:.0f}% of inflow captured)"
+    print(f"{label:<84} | {total_captured:17.2f} | {total_inflow:.2f}")
+
+    print("=" * width)
+    if write_csv:
+        print("Individual hydrograph log CSVs have been saved to your workspace.")

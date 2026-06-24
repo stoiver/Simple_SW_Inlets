@@ -20,7 +20,7 @@ x = 28.0
 y = 10.0
 spec = "Grate_900x900"
 radius = 1.5
-blockage = 0.2
+blockage = 0.0
 
 [[pits]]
 id = "Pit_03_ShortLintel"
@@ -28,7 +28,7 @@ x = 42.0
 y = 10.0
 spec = "Lintel_1.2m"
 radius = 1.5
-blockage = 0.4
+blockage = 0.0
 
 [[pits]]
 id = "Pit_04_LongLintel"
@@ -36,7 +36,7 @@ x = 56.0
 y = 10.0
 spec = "Lintel_2.4m"
 radius = 1.5
-blockage = 0.5
+blockage = 0.0
 
 [[pits]]
 id = "Pit_05_ComboSmall"
@@ -44,7 +44,7 @@ x = 70.0
 y = 10.0
 spec = "Combo_1.2m_G600"
 radius = 1.5
-blockage = 0.6
+blockage = 0.0
 
 [[pits]]
 id = "Pit_06_ComboLarge"
@@ -52,4 +52,4 @@ x = 85.0
 y = 10.0
 spec = "Combo_2.4m_G900"
 radius = 1.5
-blockage = 0.8
+blockage = 0.0

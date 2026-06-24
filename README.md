@@ -183,6 +183,9 @@ imports them as `si`); the hydraulics use an asset-library + operator design (se
 - **`Stormwater_inlet_network`** — registers inlets onto the domain (one small
   circular `anuga.Region` per pit), owns the per-asset capture logs, and exposes
   `to_dataframe()` for export.
+- **`build_network` / `print_summary`** — generic helpers: register a list of
+  placements onto a domain, and print the steady-state results table (with an
+  all-asset TOTAL row) while dumping the per-inlet CSVs.
 
 The viewer is a single class, **`Stormwater_inlet_viewer_app`**, in
 `stormwater_inlet_viewer.py`.

@@ -21,10 +21,11 @@ capture law** driven by the local ponded depth. See
 
 | File | Purpose |
 |------|---------|
-| `py_ANUGA_Simple_SW_WORKING.py` | Runs the 2-D shallow-water simulation; writes one `hydrograph_<Asset_ID>.csv` per inlet plus `sloped_inlet_experiment.sww`. |
-| `py_Plot_Pit_Depth_Q2.py` | Standalone Tkinter dashboard that scans a folder for the hydrograph CSVs and renders four diagnostic plots per inlet. |
+| `stormwater_inlet_simulation.py` | Runs the 2-D shallow-water simulation; writes one `hydrograph_<Asset_ID>.csv` per inlet plus `sloped_inlet_experiment.sww`. |
+| `stormwater_inlet_viewer.py` | Standalone Tkinter dashboard that scans a folder for the hydrograph CSVs; a **View** menu switches between per-inlet diagnostic plots and a folder-combined hydrograph. |
 | `test_inlet_hydraulics.py` | Fast unit tests for the asset/hydraulics logic and the CSV schema (no ANUGA domain built). |
 | `test_inlet_operator_integration.py` | Integration tests that evolve/query a real ANUGA domain (capture law ↔ live `update_Q`, and mass balance). |
+| `test_parallel_inlet_mass_balance.py` | MPI test: shells out to `mpiexec -np 2` and checks the parallel operator's global mass balance (skipped if MPI is unavailable). |
 | `docs/HYDRAULICS.md` | The capture-law theory, equations, transition depth, and references. |
 
 The two main scripts are coupled **only** by the CSV schema (below), not by
@@ -51,7 +52,7 @@ manifest or build step for this project.
 ### Run the simulation
 
 ```bash
-python py_ANUGA_Simple_SW_WORKING.py
+python stormwater_inlet_simulation.py
 ```
 
 This builds the domain, registers the six inlets, evolves for 120 s, prints a
@@ -63,7 +64,7 @@ The runtime is guarded by `if __name__ == "__main__"`, so importing the module
 also drive it programmatically:
 
 ```python
-import py_ANUGA_Simple_SW_WORKING as sim
+import stormwater_inlet_simulation as sim
 
 network = sim.run_experiment(yieldstep=10, finaltime=120, write_csv=True)
 df = network.to_dataframe("Pit_01_SmallGrate")
@@ -72,16 +73,21 @@ df = network.to_dataframe("Pit_01_SmallGrate")
 ### Launch the hydrograph viewer
 
 ```bash
-python py_Plot_Pit_Depth_Q2.py
+python stormwater_inlet_viewer.py
 ```
 
-A sidebar lists the hydrograph CSVs found in the chosen directory; selecting one
-draws four stacked plots:
+A sidebar lists the hydrograph CSVs found in the chosen directory. The **View**
+menu offers two modes:
 
-1. Approach vs captured discharge over time
-2. Accumulated captured / bypassed volumes
-3. Flows with ponded depth on a twin axis
-4. A time-coloured depth-vs-discharge hysteresis loop
+- **Pit Hydrograph** (default; shown when you select a file) — four stacked plots
+  for that single inlet:
+  1. Approach vs captured discharge over time
+  2. Accumulated captured / bypassed volumes
+  3. Flows with ponded depth on a twin axis
+  4. A time-coloured depth-vs-discharge hysteresis loop
+- **Combined Hydrograph** — sums captured/bypass across *every* CSV in the folder
+  onto a common time axis, plotting instantaneous flows (L/s, left axis) with the
+  cumulative captured / bypassed / combined volumes (m³, right axis).
 
 The viewer is HiDPI-aware (it reads the configured `Xft.dpi` rather than the
 DPI Tk reports, which is unreliable on Wayland/XWayland) and has live
@@ -97,6 +103,9 @@ python -m pytest
 Tests use **pytest**. `test_inlet_hydraulics.py` is fast (no domain);
 `test_inlet_operator_integration.py` builds a small ANUGA pond and is a little
 slower but still runs in well under a second.
+`test_parallel_inlet_mass_balance.py` shells out to `mpiexec -np 2` to exercise
+the parallel inlet operator; it is automatically skipped if `mpi4py` / `mpiexec`
+are not available.
 
 ---
 
@@ -152,7 +161,7 @@ The hydraulics use an asset-library + operator design (see
   `to_dataframe()` for export.
 
 The viewer is a single class, **`Stormwater_inlet_viewer_app`**, in
-`py_Plot_Pit_Depth_Q2.py`.
+`stormwater_inlet_viewer.py`.
 
 ---
 
@@ -169,7 +178,7 @@ Flows are stored in m³/s (cms) and converted to L/s only at display time.
 The exported per-inlet DataFrame additionally prepends an `Asset_ID` column.
 
 > If you rename a column in the simulation, update `required_headers` in
-> `py_Plot_Pit_Depth_Q2.py` or the GUI will reject the file.
+> `stormwater_inlet_viewer.py` or the GUI will reject the file.
 
 ---
 

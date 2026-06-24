@@ -33,9 +33,12 @@ class Stormwater_inlet_viewer_app:
         self.toolbar = None
         self.standby_lbl = None
 
-        # Currently displayed data, kept so the font slider can re-render in place
+        # Currently displayed data, kept so the font slider can re-render in place.
+        # current_view is "pit" (single-file 4-panel) or "combined" (folder totals),
+        # so a font-slider change re-renders whichever view is showing.
         self.current_df = None
         self.current_title = None
+        self.current_view = "pit"
 
         # --- Font scaling -----------------------------------------------------
         # We DON'T trust winfo_fpixels('1i'): on Wayland/XWayland it reports a bogus 96 DPI
@@ -198,6 +201,22 @@ class Stormwater_inlet_viewer_app:
         file_lbl.bind("<Enter>", lambda e: file_lbl.config(bg="#d2d2d2"))
         file_lbl.bind("<Leave>", lambda e: file_lbl.config(bg="#e8e8e8"))
 
+        # View menu: switch between the single-inlet view and the folder-combined view.
+        view_lbl = tk.Label(menubar, text="View", font=menu_font, bg="#e8e8e8", padx=12, pady=4)
+        view_lbl.pack(side=tk.LEFT)
+
+        self.view_menu = tk.Menu(self.root, tearoff=0, font=menu_font)
+        self.view_menu.add_command(label="Pit Hydrograph", command=self.show_pit_hydrograph)
+        self.view_menu.add_command(label="Combined Hydrograph", command=self.show_combined_hydrograph)
+
+        def _show_view_menu(event):
+            self.view_menu.tk_popup(view_lbl.winfo_rootx(),
+                                    view_lbl.winfo_rooty() + view_lbl.winfo_height())
+
+        view_lbl.bind("<Button-1>", _show_view_menu)
+        view_lbl.bind("<Enter>", lambda e: view_lbl.config(bg="#d2d2d2"))
+        view_lbl.bind("<Leave>", lambda e: view_lbl.config(bg="#e8e8e8"))
+
     def on_close(self):
         """Cleanly shut down so the process actually exits (closes Matplotlib figures)."""
         self._save_config()
@@ -282,9 +301,11 @@ class Stormwater_inlet_viewer_app:
         # Font-size sliders now live in File -> Font Size...
 
     def rescale_fonts(self, event=None):
-        """Re-draws the current hydrograph with the newly chosen font scale."""
+        """Re-draws whichever view is showing with the newly chosen font scale."""
         self._save_config()
-        if self.current_df is not None:
+        if self.current_view == "combined":
+            self.show_combined_hydrograph()
+        elif self.current_df is not None:
             self.generate_hydraulic_plots(self.current_df, self.current_title)
 
     def setup_graph_display_panel(self):
@@ -404,21 +425,142 @@ class Stormwater_inlet_viewer_app:
                 messagebox.showerror("Header Format Error", f"CSV lacks required headers:\n{missing_cols}")
                 return
 
-            # Clear standby message if it's still visible
-            if self.standby_lbl:
-                self.standby_lbl.pack_forget()
-                self.standby_lbl = None
-
-            self.generate_hydraulic_plots(df, filename)
+            # Keep the selection so the View menu / font slider can re-render it.
+            self.current_df = df
+            self.current_title = filename
+            self.show_pit_hydrograph()
 
         except Exception as e:
             messagebox.showerror("Parsing Failure", f"Failed to correctly load hydrograph:\n{str(e)}")
+
+    def _clear_standby(self):
+        """Remove the placeholder message once something is plotted."""
+        if self.standby_lbl:
+            self.standby_lbl.pack_forget()
+            self.standby_lbl = None
+
+    def show_pit_hydrograph(self):
+        """View menu: the single-inlet 4-panel diagnostic plots."""
+        if self.current_df is None:
+            messagebox.showinfo("No Data", "Select a hydrograph CSV from the sidebar first.")
+            return
+        self._clear_standby()
+        self.generate_hydraulic_plots(self.current_df, self.current_title)
+
+    def show_combined_hydrograph(self):
+        """View menu: folder totals — sum Captured/Bypass across every CSV in the
+        directory and plot instantaneous flows (L/s) with cumulative volumes (m³)."""
+        path = self.selected_dir.get()
+        if not os.path.exists(path):
+            messagebox.showinfo("No Directory", "Select a valid data directory first.")
+            return
+
+        csvs = [os.path.join(path, f) for f in os.listdir(path) if f.lower().endswith('.csv')]
+        if not csvs:
+            messagebox.showinfo("No CSVs", "No CSV files found in the selected directory.")
+            return
+
+        # Merge each file's Captured/Bypass series onto a common Time_s axis.
+        merged = None
+        skipped = []
+        for fp in csvs:
+            try:
+                df = pd.read_csv(fp, usecols=["Time_s", "Captured_Q_cms", "Bypass_Q_cms"])
+            except (ValueError, OSError):
+                skipped.append(os.path.basename(fp))   # missing columns / unreadable
+                continue
+            base = os.path.basename(fp)
+            df = df.rename(columns={"Captured_Q_cms": f"Captured__{base}",
+                                    "Bypass_Q_cms": f"Bypass__{base}"})
+            merged = df if merged is None else pd.merge(merged, df, on="Time_s", how="outer")
+
+        if merged is None:
+            messagebox.showinfo("No Valid Files",
+                                "No CSVs with the required hydrograph columns were found.")
+            return
+        if skipped:
+            messagebox.showwarning("Skipped Files",
+                                   "Ignored CSVs without hydrograph columns:\n"
+                                   + "\n".join(skipped))
+
+        merged = merged.sort_values("Time_s").reset_index(drop=True)
+        cap_cols = [c for c in merged.columns if c.startswith("Captured__")]
+        byp_cols = [c for c in merged.columns if c.startswith("Bypass__")]
+        merged[cap_cols] = merged[cap_cols].fillna(0.0)
+        merged[byp_cols] = merged[byp_cols].fillna(0.0)
+
+        captured_cms = merged[cap_cols].sum(axis=1)
+        bypass_cms = merged[byp_cols].sum(axis=1)
+        combined_cms = captured_cms + bypass_cms
+
+        # Cumulative volumes (m³) by integrating cms over the time deltas.
+        dt = merged["Time_s"].astype(float).diff().fillna(0.0)
+        cap_cum_m3 = (captured_cms * dt).cumsum()
+        byp_cum_m3 = (bypass_cms * dt).cumsum()
+        comb_cum_m3 = (combined_cms * dt).cumsum()
+
+        time_s = merged["Time_s"]
+        q_cap_lps = captured_cms * 1000.0
+        q_byp_lps = bypass_cms * 1000.0
+        q_comb_lps = combined_cms * 1000.0
+
+        self._clear_standby()
+        self.current_view = "combined"
+
+        if self.canvas:
+            self.canvas.get_tk_widget().destroy()
+        if self.toolbar:
+            self.toolbar.destroy()
+
+        s = self.font_scale.get()
+        suptitle_fs = 10 * s
+        title_fs = 10 * s
+        label_fs = 9 * s
+        legend_fs = 8 * s
+        tick_fs = 8 * s
+
+        fig, ax_flow = plt.subplots(nrows=1, ncols=1, figsize=(10, 6), constrained_layout=True)
+        ax_vol = ax_flow.twinx()
+
+        n_files = len(cap_cols)
+        fig.suptitle(f"Combined Hydrograph — {n_files} inlet(s) — "
+                     f"Max Combined = {q_comb_lps.max():.2f} L/s",
+                     fontsize=suptitle_fs, fontweight="bold")
+
+        # Instantaneous flows on the left axis.
+        p1, = ax_flow.plot(time_s, q_cap_lps, color="#2e7d32", lw=1.6, label="Captured (L/s)")
+        p2, = ax_flow.plot(time_s, q_byp_lps, color="#d32f2f", lw=1.2, linestyle="-.", label="Bypassed (L/s)")
+        p3, = ax_flow.plot(time_s, q_comb_lps, color="#1e88e5", lw=1.8, linestyle="--", label="Combined (L/s)")
+        ax_flow.set_title("Folder Totals Across All Inlets", fontsize=title_fs, pad=6, loc='left')
+        ax_flow.set_xlabel("Elapsed Time (s)", fontsize=label_fs)
+        ax_flow.set_ylabel("Flow (L/s)", fontsize=label_fs)
+        ax_flow.grid(True, linestyle="--", alpha=0.5)
+        ax_flow.tick_params(axis='both', which='major', labelsize=tick_fs)
+
+        # Cumulative volumes on the right axis.
+        q1, = ax_vol.plot(time_s, cap_cum_m3, color="#2e7d32", lw=1.0, linestyle=':', label="Captured cum (m³)")
+        q2, = ax_vol.plot(time_s, byp_cum_m3, color="#d32f2f", lw=1.0, linestyle=':', label="Bypassed cum (m³)")
+        q3, = ax_vol.plot(time_s, comb_cum_m3, color="#1e88e5", lw=1.2, linestyle='-.', label="Combined cum (m³)")
+        ax_vol.set_ylabel("Cumulative Volume (m³)", fontsize=label_fs)
+        ax_vol.tick_params(axis='y', labelsize=tick_fs)
+
+        lines = [p1, p2, p3, q1, q2, q3]
+        ax_flow.legend(lines, [ln.get_label() for ln in lines], loc="upper left", fontsize=legend_fs)
+
+        self.canvas = FigureCanvasTkAgg(fig, master=self.canvas_frame)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        self.toolbar = NavigationToolbar2Tk(self.canvas, self.canvas_frame)
+        self.toolbar.update()
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     def generate_hydraulic_plots(self, df, title_label):
         """Generates the four diagnostic subplots into the Tkinter layout canvas using constrained_layout."""
         # Remember what is on screen so the font slider can re-render it
         self.current_df = df
         self.current_title = title_label
+        self.current_view = "pit"
 
         if self.canvas:
             self.canvas.get_tk_widget().destroy()

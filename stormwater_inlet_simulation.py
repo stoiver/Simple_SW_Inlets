@@ -2,7 +2,19 @@ import os
 import anuga
 import numpy as np
 import pandas as pd
+# NB: import the Inlet_operator *class* (subclassable). The top-level
+# anuga.Inlet_operator is a factory *function* and cannot be subclassed.
 from anuga.structures.inlet_operator import Inlet_operator
+
+# The parallel operator base is only needed for MPI (distributed-domain) runs and
+# pulls in ANUGA's parallel stack; degrade gracefully if it is unavailable so the
+# serial path still imports.
+try:
+    from anuga.parallel.parallel_inlet_operator import Parallel_Inlet_operator
+    _HAVE_PARALLEL = True
+except Exception:
+    Parallel_Inlet_operator = object
+    _HAVE_PARALLEL = False
 
 # ==========================================
 # 1. CORE STORMWATER ASSET LIBRARY CLASSES
@@ -36,19 +48,16 @@ INLET_LIBRARY = {
 }
 
 
-class Depth_driven_inlet_operator(Inlet_operator):
-    """Stormwater inlet implemented as an ANUGA Inlet_operator.
+class _Depth_driven_capture_mixin:
+    """Shared weir/orifice capture hydraulics and hydrograph logging.
 
-    The capture discharge is a function of the inlet's (region-averaged) ponded
-    depth, using dual-regime weir/orifice hydraulics, and is returned from
-    update_Q() as a negative discharge (water leaving the domain). The parent
-    Inlet_operator distributes that discharge over the inlet region and enforces
-    mass balance, so we never touch the stage array directly.
+    Mixed into both the serial and parallel operators so the physics
+    (transition_depth / capture_discharge) and the capture-log record are defined
+    once. The host operator supplies the ponded depth and momentum samples —
+    per-subdomain (local) in serial, globally reduced across ranks in parallel.
     """
-    def __init__(self, domain, region, spec, capture_log=None,
-                 C_w=1.66, C_o=0.67, label=None, **kwargs):
-        Inlet_operator.__init__(self, domain, region, Q=0.0, label=label, **kwargs)
 
+    def _init_capture(self, spec, C_w, C_o, capture_log):
         self.spec = spec
         self.C_w = C_w
         self.C_o = C_o
@@ -88,43 +97,31 @@ class Depth_driven_inlet_operator(Inlet_operator):
         if depth <= 1e-4:
             return 0.0
         if d_trans is None:
-            d_trans = Depth_driven_inlet_operator.transition_depth(A, P, C_w, C_o, g)
+            d_trans = _Depth_driven_capture_mixin.transition_depth(A, P, C_w, C_o, g)
         if depth < d_trans:
             return C_w * P * (depth ** 1.5)              # Weir flow
         return C_o * A * np.sqrt(2 * g * depth)          # Orifice flow
 
-    def update_Q(self, t):
-        """Capture discharge as a function of inlet state (negative => extraction).
-
-        t is unused: Q depends on the current ponded depth, not on time.
-        """
-        depth = self.inlet.get_average_depth()
+    def _capture_Q(self, depth):
+        """Signed capture discharge (negative => extraction) for a ponded depth."""
         A = self.spec.operational_area
         P = self.spec.operational_perimeter
         return -self.capture_discharge(depth, A, P, self.C_w, self.C_o,
                                        self.g, self.d_trans)
 
-    def __call__(self):
-        # Parent applies the discharge (with mass-balance clamping) and sets self.applied_Q.
-        Inlet_operator.__call__(self)
+    def _log_capture(self, depth, uh, vh, area, dt):
+        """Append one hydrograph record from the sampled inlet state.
 
-        if self.capture_log is None:
-            return
-
-        dt = self.domain.get_timestep()
-        depth = self.inlet.get_average_depth()
-
-        # applied_Q is negative for extraction; report the realised capture as positive.
+        applied_Q (set by the parent operator) is negative for extraction; the
+        realised capture is reported as positive. Approach discharge is estimated
+        from the region-averaged specific discharge and a representative width
+        (sqrt of the inlet area), and bypass is whatever the approach flow exceeds
+        the captured flow by.
+        """
         captured_Q = max(0.0, -self.applied_Q)
-
-        # Approach discharge across the inlet footprint, from the region-averaged
-        # specific discharge and a representative width (sqrt of the inlet area).
-        uh = self.inlet.get_average_xmom()
-        vh = self.inlet.get_average_ymom()
         specific_discharge = np.sqrt(uh ** 2 + vh ** 2)
-        width = np.sqrt(self.inlet.get_area())
+        width = np.sqrt(area)
         Q_approach = specific_discharge * width
-
         bypass_Q = max(0.0, Q_approach - captured_Q)
 
         self.total_volume_captured += captured_Q * dt
@@ -141,6 +138,89 @@ class Depth_driven_inlet_operator(Inlet_operator):
         })
 
 
+class Depth_driven_inlet_operator(_Depth_driven_capture_mixin, Inlet_operator):
+    """Stormwater inlet implemented as a (serial) ANUGA Inlet_operator.
+
+    The capture discharge is a function of the inlet's region-averaged ponded
+    depth, using dual-regime weir/orifice hydraulics, and is returned from
+    update_Q() as a negative discharge (water leaving the domain). The parent
+    Inlet_operator distributes that discharge over the inlet region and enforces
+    mass balance, so we never touch the stage array directly.
+
+    The depth/momentum samples here are per-subdomain (local). For an MPI run on
+    a distributed domain use Depth_driven_parallel_inlet_operator instead.
+    """
+    def __init__(self, domain, region, spec, capture_log=None,
+                 C_w=1.66, C_o=0.67, label=None, **kwargs):
+        Inlet_operator.__init__(self, domain, region, Q=0.0, label=label, **kwargs)
+        self._init_capture(spec, C_w, C_o, capture_log)
+
+    def update_Q(self, t):
+        """Capture discharge from the current ponded depth (t unused)."""
+        return self._capture_Q(self.inlet.get_average_depth())
+
+    def __call__(self):
+        # Parent applies the discharge (with mass-balance clamping) and sets applied_Q.
+        Inlet_operator.__call__(self)
+        if self.capture_log is None:
+            return
+        self._log_capture(self.inlet.get_average_depth(),
+                          self.inlet.get_average_xmom(),
+                          self.inlet.get_average_ymom(),
+                          self.inlet.get_area(),
+                          self.domain.get_timestep())
+
+
+class Depth_driven_parallel_inlet_operator(_Depth_driven_capture_mixin,
+                                           Parallel_Inlet_operator):
+    """MPI-safe counterpart of Depth_driven_inlet_operator.
+
+    Two parallel subtleties drive the differences from the serial class:
+
+    * ``Inlet.get_average_depth()`` is per-subdomain (local). When the inlet
+      footprint straddles ranks the capture law needs the *global* average, so
+      this class uses ``get_global_average_depth()`` (and the ``get_global_*``
+      momentum/area reductions for the hydrograph log).
+    * ``Parallel_Inlet_operator.__call__`` invokes ``update_Q`` on the master
+      rank only (it then broadcasts the resulting volume). The ``get_global_*``
+      reductions are collective and must be entered by every rank, so they are
+      sampled in ``__call__`` (all ranks) and the master-only ``update_Q`` reads
+      the stashed global depth — calling a collective inside ``update_Q`` would
+      deadlock the non-master ranks waiting in the broadcast.
+
+    Note: ANUGA does not auto-discover which ranks hold the inlet; for a footprint
+    spanning multiple ranks pass ``procs=[...]`` (and ``master_proc``) through, per
+    ANUGA's parallel-inlet conventions.
+    """
+    def __init__(self, domain, region, spec, capture_log=None,
+                 C_w=1.66, C_o=0.67, label=None, **kwargs):
+        Parallel_Inlet_operator.__init__(self, domain, region, Q=0.0,
+                                         label=label, **kwargs)
+        self._init_capture(spec, C_w, C_o, capture_log)
+        self._global_depth = 0.0
+
+    def update_Q(self, t):
+        # Master-only; uses the global depth gathered collectively in __call__.
+        return self._capture_Q(self._global_depth)
+
+    def __call__(self):
+        # Collective: every rank must enter this so the reduction completes.
+        self._global_depth = self.inlet.get_global_average_depth()
+        # Master computes Q via update_Q and broadcasts the volume to the others.
+        Parallel_Inlet_operator.__call__(self)
+
+        if self.capture_log is None:
+            return
+        # get_global_* are collective -> sample on every rank before guarding.
+        uh = self.inlet.get_global_average_xmom()
+        vh = self.inlet.get_global_average_ymom()
+        area = self.inlet.get_global_area()
+        if self.myid != self.master_proc:
+            return
+        self._log_capture(self._global_depth, uh, vh, area,
+                          self.domain.get_timestep())
+
+
 class Stormwater_inlet_network:
     """Manages collections of point-based inlets and handles data reporting."""
     def __init__(self, domain):
@@ -148,7 +228,8 @@ class Stormwater_inlet_network:
         self.inlets = {}
         self.logs = {}
 
-    def add_inlet(self, asset_id, x, y, spec_key, blockage_factor=0.0, radius=1.5):
+    def add_inlet(self, asset_id, x, y, spec_key, blockage_factor=0.0, radius=1.5,
+                  **operator_kwargs):
         if spec_key not in INLET_LIBRARY:
             raise KeyError(f"Asset spec '{spec_key}' not found.")
 
@@ -158,9 +239,22 @@ class Stormwater_inlet_network:
         # Define the inlet footprint as a small circular region around the pit.
         region = anuga.Region(self.domain, center=[x, y], radius=radius)
 
+        # Pick the serial or MPI-safe operator based on whether the domain has
+        # been distributed. Extra kwargs (e.g. master_proc/procs for parallel)
+        # are forwarded to the operator.
+        if getattr(self.domain, "parallel", False):
+            if not _HAVE_PARALLEL:
+                raise RuntimeError(
+                    "Domain is distributed but ANUGA's parallel inlet operator "
+                    "could not be imported.")
+            operator_cls = Depth_driven_parallel_inlet_operator
+        else:
+            operator_cls = Depth_driven_inlet_operator
+
         self.logs[asset_id] = []
-        operator = Depth_driven_inlet_operator(self.domain, region, spec,
-                                            capture_log=self.logs[asset_id], label=asset_id)
+        operator = operator_cls(self.domain, region, spec,
+                                capture_log=self.logs[asset_id], label=asset_id,
+                                **operator_kwargs)
         self.inlets[asset_id] = operator
         return operator
 

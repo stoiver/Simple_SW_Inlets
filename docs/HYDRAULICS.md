@@ -96,7 +96,7 @@ is always in the orifice regime.
 
 ## Where this lives in the code
 
-In `py_ANUGA_Simple_SW_WORKING.py`:
+In `stormwater_inlet_simulation.py`:
 
 ```python
 class Depth_driven_inlet_operator(Inlet_operator):
@@ -138,6 +138,44 @@ d_trans = (0.67 · 0.21 · √(2·9.81)) / (1.66 · 2.40) ≈ 0.156 m
   `Q = 1.66 · 2.40 · 0.10^1.5 ≈ 0.126 m³/s`
 - At `d = 0.30 m` (> `d_trans`, orifice):
   `Q = 0.67 · 0.21 · √(2·9.81·0.30) ≈ 0.341 m³/s`
+
+## Running in parallel (MPI)
+
+On a single (serial) domain, `inlet.get_average_depth()` covers the whole inlet
+and the capture law is correct as written. On a **distributed** domain
+(`anuga.distribute(domain)`, run under `mpirun`/`mpiexec`) the inlet footprint
+can be split across ranks, and `get_average_depth()` is then **per-subdomain
+(local)** — feeding the capture law only this rank's slice of the pond. The
+*global* average is needed instead.
+
+`Depth_driven_parallel_inlet_operator` handles this. It subclasses ANUGA's
+`Parallel_Inlet_operator` and shares the exact same capture hydraulics via the
+`_Depth_driven_capture_mixin`, differing only in *how the inlet state is
+sampled*:
+
+- It uses the collective `get_global_average_depth()` (and the `get_global_*`
+  momentum/area reductions for the hydrograph log) instead of the local ones.
+- **`update_Q` runs on the master rank only.** `Parallel_Inlet_operator.__call__`
+  computes the discharge on the master and broadcasts the resulting volume to the
+  other ranks (which wait in a receive). The `get_global_*` calls are collective
+  and must be entered by *every* rank, so they are sampled in `__call__` (all
+  ranks) and the master-only `update_Q` reads the stashed global depth. Calling a
+  collective reduction *inside* `update_Q` would deadlock the waiting ranks.
+
+`Stormwater_inlet_network.add_inlet` selects the operator automatically from
+`domain.parallel` (serial vs distributed). ANUGA does **not** auto-discover which
+ranks hold an inlet, so for a footprint spanning multiple ranks pass the
+participating ranks through:
+
+```python
+network.add_inlet("Pit_01", x, y, "Grate_600x600",
+                  master_proc=0, procs=list(range(numprocs)))
+```
+
+This is exercised by `test_parallel_inlet_mass_balance.py`, which shells out to
+`mpiexec -np 2` (anuga_core convention): the global water loss matches the
+operator's captured volume to machine precision (~3e-15), confirming the global
+reduction, the master-only `update_Q`, and the collective sampling are correct.
 
 ## Inlet catalogue (`INLET_LIBRARY`)
 

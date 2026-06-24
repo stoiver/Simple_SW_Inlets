@@ -1,0 +1,54 @@
+# Pit placements — mirrors the built-in PIT_PLACEMENTS.
+# Load with:  python stormwater_inlet_simulation.py --placements config/pit_placements.toml
+#
+# One [[pits]] table per inlet. Required: id, x, y, spec (must match a key in the
+# inlet library). Optional: radius (footprint radius m, default 1.5) and
+# blockage (0.0 = clear .. 1.0 = fully blocked, default 0.0).
+
+[[pits]]
+id = "Pit_01_SmallGrate"
+x = 15.0
+y = 10.0
+spec = "Grate_600x600"
+radius = 1.5
+blockage = 0.0
+
+[[pits]]
+id = "Pit_02_LargeGrate"
+x = 28.0
+y = 10.0
+spec = "Grate_900x900"
+radius = 1.5
+blockage = 0.2
+
+[[pits]]
+id = "Pit_03_ShortLintel"
+x = 42.0
+y = 10.0
+spec = "Lintel_1.2m"
+radius = 1.5
+blockage = 0.4
+
+[[pits]]
+id = "Pit_04_LongLintel"
+x = 56.0
+y = 10.0
+spec = "Lintel_2.4m"
+radius = 1.5
+blockage = 0.5
+
+[[pits]]
+id = "Pit_05_ComboSmall"
+x = 70.0
+y = 10.0
+spec = "Combo_1.2m_G600"
+radius = 1.5
+blockage = 0.6
+
+[[pits]]
+id = "Pit_06_ComboLarge"
+x = 85.0
+y = 10.0
+spec = "Combo_2.4m_G900"
+radius = 1.5
+blockage = 0.8

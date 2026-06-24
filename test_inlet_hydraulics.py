@@ -12,10 +12,13 @@ Run with::
 """
 
 import math
+import os
 
 import pytest
 
 import stormwater_inlet_simulation as sim
+
+_CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
 
 OP = sim.Depth_driven_inlet_operator
 C_W, C_O, G = 1.66, 0.67, 9.81
@@ -151,3 +154,69 @@ def test_to_dataframe_matches_csv_contract():
     df = net.to_dataframe("Pit_A")
     assert list(df.columns) == CSV_COLUMNS
     assert df.iloc[0]["Asset_ID"] == "Pit_A"
+
+
+# --------------------------------------------------------------------------- #
+# TOML config loaders                                                         #
+# --------------------------------------------------------------------------- #
+
+def test_load_inlet_library_roundtrip(tmp_path):
+    p = tmp_path / "lib.toml"
+    p.write_text(
+        "[inlets.MyGrate]\n"
+        "clear_area = 0.5\n"
+        "effective_perimeter = 3.0\n"
+    )
+    lib = sim.load_inlet_library(str(p))
+    assert set(lib) == {"MyGrate"}
+    spec = lib["MyGrate"]
+    assert isinstance(spec, sim.Inlet_specification)
+    assert spec.clear_area == pytest.approx(0.5)
+    assert spec.effective_perimeter == pytest.approx(3.0)
+
+
+def test_load_inlet_library_missing_key_raises(tmp_path):
+    p = tmp_path / "bad.toml"
+    p.write_text("[inlets.Broken]\nclear_area = 0.5\n")   # no effective_perimeter
+    with pytest.raises(ValueError):
+        sim.load_inlet_library(str(p))
+
+
+def test_load_pit_placements_roundtrip(tmp_path):
+    p = tmp_path / "pits.toml"
+    p.write_text(
+        '[[pits]]\nid = "P1"\nx = 1.0\ny = 2.0\nspec = "MyGrate"\n'
+        'radius = 2.0\nblockage = 0.3\n'
+    )
+    pits = sim.load_pit_placements(str(p))
+    assert len(pits) == 1
+    assert pits[0] == {"id": "P1", "x": 1.0, "y": 2.0, "spec": "MyGrate",
+                       "radius": 2.0, "blockage": 0.3}
+
+
+def test_load_pit_placements_missing_required_raises(tmp_path):
+    p = tmp_path / "pits.toml"
+    p.write_text('[[pits]]\nid = "P1"\nx = 1.0\n')   # missing y, spec
+    with pytest.raises(ValueError):
+        sim.load_pit_placements(str(p))
+
+
+def test_shipped_config_files_match_builtins():
+    """The example TOMLs in config/ should reproduce the built-in library/keys."""
+    lib = sim.load_inlet_library(os.path.join(_CONFIG_DIR, "inlet_library.toml"))
+    assert set(lib) == set(sim.INLET_LIBRARY)
+    for name, spec in lib.items():
+        assert spec.clear_area == pytest.approx(sim.INLET_LIBRARY[name].clear_area)
+        assert spec.effective_perimeter == pytest.approx(
+            sim.INLET_LIBRARY[name].effective_perimeter)
+
+    pits = sim.load_pit_placements(os.path.join(_CONFIG_DIR, "pit_placements.toml"))
+    assert [p["id"] for p in pits] == [p["id"] for p in sim.PIT_PLACEMENTS]
+
+
+def test_network_uses_provided_library():
+    """add_inlet resolves spec keys against the network's library, not the global."""
+    custom = {"OnlyThis": sim.Inlet_specification("OnlyThis", 0.1, 1.0)}
+    net = sim.Stormwater_inlet_network(domain=None, library=custom)
+    with pytest.raises(KeyError):                 # built-in key absent from custom lib
+        net.add_inlet("p", 0.0, 0.0, "Grate_600x600")

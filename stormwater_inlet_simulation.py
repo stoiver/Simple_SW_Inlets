@@ -2,6 +2,11 @@ import os
 import anuga
 import numpy as np
 import pandas as pd
+
+try:
+    import tomllib            # Python 3.11+
+except ModuleNotFoundError:   # pragma: no cover - fallback for older Pythons
+    import tomli as tomllib
 # NB: import the Inlet_operator *class* (subclassable). The top-level
 # anuga.Inlet_operator is a factory *function* and cannot be subclassed.
 from anuga.structures.inlet_operator import Inlet_operator
@@ -51,6 +56,66 @@ INLET_LIBRARY = {
     "Combo_1.2m_G600": Inlet_specification("Combo_1.2m_G600", 0.39, 3.00),
     "Combo_2.4m_G900": Inlet_specification("Combo_2.4m_G900", 0.84, 5.10)
 }
+
+
+def load_inlet_library(path):
+    """Load an inlet asset catalogue from a TOML file.
+
+    Expected layout (one table per named inlet)::
+
+        [inlets.Grate_600x600]
+        clear_area = 0.21
+        effective_perimeter = 2.40
+
+    Returns a {name: Inlet_specification} dict suitable for
+    ``Stormwater_inlet_network(domain, library=...)``.
+    """
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+
+    inlets = data.get("inlets", {})
+    if not inlets:
+        raise ValueError(f"No [inlets.*] tables found in {path}")
+
+    library = {}
+    for name, props in inlets.items():
+        try:
+            library[name] = Inlet_specification(
+                name, props["clear_area"], props["effective_perimeter"])
+        except KeyError as e:
+            raise ValueError(
+                f"Inlet '{name}' in {path} is missing required key {e}") from e
+    return library
+
+
+def load_pit_placements(path):
+    """Load pit placements from a TOML file.
+
+    Expected layout (an array of tables)::
+
+        [[pits]]
+        id = "Pit_01_SmallGrate"
+        x = 15.0
+        y = 10.0
+        spec = "Grate_600x600"
+        radius = 1.5      # optional
+        blockage = 0.0    # optional
+
+    Returns a list of placement dicts (the same shape as PIT_PLACEMENTS).
+    """
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+
+    pits = data.get("pits", [])
+    if not pits:
+        raise ValueError(f"No [[pits]] entries found in {path}")
+
+    required = ("id", "x", "y", "spec")
+    for i, pit in enumerate(pits):
+        missing = [k for k in required if k not in pit]
+        if missing:
+            raise ValueError(f"Pit #{i} in {path} is missing keys: {missing}")
+    return pits
 
 
 class _Depth_driven_capture_mixin:
@@ -252,17 +317,20 @@ class Depth_driven_parallel_inlet_operator(_Depth_driven_capture_mixin,
 
 class Stormwater_inlet_network:
     """Manages collections of point-based inlets and handles data reporting."""
-    def __init__(self, domain):
+    def __init__(self, domain, library=None):
         self.domain = domain
+        # Catalogue of named inlet specs to resolve spec keys against; defaults to
+        # the built-in INLET_LIBRARY but can be a catalogue loaded from a file.
+        self.library = library if library is not None else INLET_LIBRARY
         self.inlets = {}
         self.logs = {}
 
     def add_inlet(self, asset_id, x, y, spec_key, blockage_factor=0.0, radius=1.5,
                   **operator_kwargs):
-        if spec_key not in INLET_LIBRARY:
+        if spec_key not in self.library:
             raise KeyError(f"Asset spec '{spec_key}' not found.")
 
-        base_spec = INLET_LIBRARY[spec_key]
+        base_spec = self.library[spec_key]
         spec = Inlet_specification(base_spec.name, base_spec.clear_area, base_spec.effective_perimeter, blockage_factor)
 
         # Define the inlet footprint as a small circular region around the pit.
@@ -301,13 +369,15 @@ class Stormwater_inlet_network:
 
 # Place 6 pits spaced out down the sloping channel at y = 10.0m (mid-channel).
 # "radius" sets the circular inlet-footprint region (m) over which depth is sampled.
+# "blockage" derates the inlet's clear area & perimeter (0.0 = clear, 1.0 = fully
+# blocked); it is optional and defaults to 0.0 when omitted.
 PIT_PLACEMENTS = [
-    {"id": "Pit_01_SmallGrate", "x": 15.0, "y": 10.0, "spec": "Grate_600x600",   "radius": 1.5},
-    {"id": "Pit_02_LargeGrate", "x": 28.0, "y": 10.0, "spec": "Grate_900x900",   "radius": 1.5},
-    {"id": "Pit_03_ShortLintel", "x": 42.0, "y": 10.0, "spec": "Lintel_1.2m",    "radius": 1.5},
-    {"id": "Pit_04_LongLintel",  "x": 56.0, "y": 10.0, "spec": "Lintel_2.4m",    "radius": 1.5},
-    {"id": "Pit_05_ComboSmall",  "x": 70.0, "y": 10.0, "spec": "Combo_1.2m_G600", "radius": 1.5},
-    {"id": "Pit_06_ComboLarge",  "x": 85.0, "y": 10.0, "spec": "Combo_2.4m_G900", "radius": 1.5}
+    {"id": "Pit_01_SmallGrate", "x": 15.0, "y": 10.0, "spec": "Grate_600x600",   "radius": 1.5, "blockage": 0.0},
+    {"id": "Pit_02_LargeGrate", "x": 28.0, "y": 10.0, "spec": "Grate_900x900",   "radius": 1.5, "blockage": 0.2},
+    {"id": "Pit_03_ShortLintel", "x": 42.0, "y": 10.0, "spec": "Lintel_1.2m",    "radius": 1.5, "blockage": 0.4},
+    {"id": "Pit_04_LongLintel",  "x": 56.0, "y": 10.0, "spec": "Lintel_2.4m",    "radius": 1.5, "blockage": 0.5},
+    {"id": "Pit_05_ComboSmall",  "x": 70.0, "y": 10.0, "spec": "Combo_1.2m_G600", "radius": 1.5, "blockage": 0.6},
+    {"id": "Pit_06_ComboLarge",  "x": 85.0, "y": 10.0, "spec": "Combo_2.4m_G900", "radius": 1.5, "blockage": 0.8}
 ]
 
 
@@ -359,19 +429,24 @@ def build_domain():
     return domain
 
 
-def build_network(domain, pit_placements=PIT_PLACEMENTS):
-    """Register the configured inlets onto the domain and return the network."""
-    network = Stormwater_inlet_network(domain)
+def build_network(domain, pit_placements=PIT_PLACEMENTS, library=None):
+    """Register the configured inlets onto the domain and return the network.
+
+    `library` defaults to the built-in INLET_LIBRARY; pass one from
+    load_inlet_library() to use a file-defined asset catalogue.
+    """
+    network = Stormwater_inlet_network(domain, library=library)
     for pit in pit_placements:
         network.add_inlet(pit["id"], pit["x"], pit["y"], pit["spec"],
-                          blockage_factor=0.0, radius=pit.get("radius", 1.5))
+                          blockage_factor=pit.get("blockage", 0.0),
+                          radius=pit.get("radius", 1.5))
     print(f"Registered {len(network.inlets)} distinct configurations in path line.")
     return network
 
 
 def print_summary(network, pit_placements=PIT_PLACEMENTS, write_csv=True):
     """Print the steady-state results table and optionally dump per-inlet CSVs."""
-    header = (f"{'Asset ID':<18} | {'Type':<15} | {'Depth (m)':<9} | "
+    header = (f"{'Asset ID':<18} | {'Type':<15} | {'Block':<5} | {'Depth (m)':<9} | "
               f"{'Q_In (L/s)':<10} | {'Bypass (L/s)':<12} | "
               f"{'Cum_Captured (m3)':<17} | {'Cum_Inflow (m3)'}")
     width = len(header)
@@ -395,7 +470,8 @@ def print_summary(network, pit_placements=PIT_PLACEMENTS, write_csv=True):
             cum_captured = final_row["Cum_Captured_m3"]       # Total volume swallowed (m3)
             cum_inflow = final_row["Cum_Inflow_m3"]           # Total volume that reached the inlet (m3)
 
-            print(f"{asset_id:<18} | {pit['spec']:<15} | {depth:9.3f} | "
+            blockage = pit.get("blockage", 0.0)
+            print(f"{asset_id:<18} | {pit['spec']:<15} | {blockage:5.2f} | {depth:9.3f} | "
                   f"{q_cap_lps:10.1f} | {q_byp_lps:12.1f} | "
                   f"{cum_captured:17.2f} | {cum_inflow:.2f}")
 
@@ -409,10 +485,22 @@ def print_summary(network, pit_placements=PIT_PLACEMENTS, write_csv=True):
         print("Individual hydrograph log CSVs have been saved to your workspace.")
 
 
-def run_experiment(yieldstep=10, finaltime=120, write_csv=True):
-    """Build the domain, register inlets, evolve, and report results."""
+def run_experiment(yieldstep=10, finaltime=120, write_csv=True,
+                   library_path=None, placements_path=None):
+    """Build the domain, register inlets, evolve, and report results.
+
+    library_path / placements_path: optional TOML files overriding the built-in
+    INLET_LIBRARY / PIT_PLACEMENTS (see load_inlet_library / load_pit_placements).
+    """
+    library = load_inlet_library(library_path) if library_path else None
+    placements = load_pit_placements(placements_path) if placements_path else PIT_PLACEMENTS
+    if library_path:
+        print(f"Loaded {len(library)} inlet specs from {library_path}")
+    if placements_path:
+        print(f"Loaded {len(placements)} pit placements from {placements_path}")
+
     domain = build_domain()
-    network = build_network(domain)
+    network = build_network(domain, pit_placements=placements, library=library)
 
     print("\nStarting simulation loop...")
     # Run for `finaltime` seconds to allow conditions to stabilise across the slope
@@ -420,9 +508,26 @@ def run_experiment(yieldstep=10, finaltime=120, write_csv=True):
         print(f"Simulation Time: {t:.1f}s")
         domain.report_water_volume_statistics()
 
-    print_summary(network, write_csv=write_csv)
+    print_summary(network, pit_placements=placements, write_csv=write_csv)
     return network
 
 
+def _parse_args(argv=None):
+    import argparse
+    p = argparse.ArgumentParser(
+        description="Run the ANUGA stormwater-inlet experiment.")
+    p.add_argument("--library", metavar="TOML",
+                   help="inlet asset catalogue TOML (default: built-in INLET_LIBRARY)")
+    p.add_argument("--placements", metavar="TOML",
+                   help="pit placements TOML (default: built-in PIT_PLACEMENTS)")
+    p.add_argument("--finaltime", type=float, default=120.0,
+                   help="simulation end time in seconds (default: 120)")
+    p.add_argument("--yieldstep", type=float, default=10.0,
+                   help="reporting interval in seconds (default: 10)")
+    return p.parse_args(argv)
+
+
 if __name__ == "__main__":
-    run_experiment()
+    args = _parse_args()
+    run_experiment(yieldstep=args.yieldstep, finaltime=args.finaltime,
+                   library_path=args.library, placements_path=args.placements)

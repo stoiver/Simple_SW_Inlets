@@ -26,6 +26,7 @@ capture law** driven by the local ponded depth. See
 | `test_inlet_hydraulics.py` | Fast unit tests for the asset/hydraulics logic and the CSV schema (no ANUGA domain built). |
 | `test_inlet_operator_integration.py` | Integration tests that evolve/query a real ANUGA domain (capture law ↔ live `update_Q`, and mass balance). |
 | `test_parallel_inlet_mass_balance.py` | MPI test: shells out to `mpiexec -np 2` and checks the parallel operator's global mass balance (skipped if MPI is unavailable). |
+| `config/*.toml` | Example TOML config (inlet catalogue + pit placements) mirroring the built-in defaults. |
 | `docs/HYDRAULICS.md` | The capture-law theory, equations, transition depth, and references. |
 
 The two main scripts are coupled **only** by the CSV schema (below), not by
@@ -58,6 +59,22 @@ python stormwater_inlet_simulation.py
 This builds the domain, registers the six inlets, evolves for 120 s, prints a
 results summary, and writes `hydrograph_*.csv` (one per inlet) and
 `sloped_inlet_experiment.sww` into the working directory.
+
+By default the inlet catalogue and pit placements come from the built-in
+`INLET_LIBRARY` / `PIT_PLACEMENTS`. You can instead load them from **TOML**:
+
+```bash
+python stormwater_inlet_simulation.py \
+    --library config/inlet_library.toml \
+    --placements config/pit_placements.toml
+```
+
+The example files in `config/` mirror the defaults — edit a copy to define your
+own inlet types (`[inlets.<name>]` with `clear_area`/`effective_perimeter`; quote
+names containing a dot, e.g. `[inlets."Lintel_1.2m"]`) or pit layout (`[[pits]]`
+with required `id/x/y/spec` and optional `radius`/`blockage`). Reading uses the
+stdlib `tomllib` (Python 3.11+); `load_inlet_library()` / `load_pit_placements()`
+are also importable.
 
 The runtime is guarded by `if __name__ == "__main__"`, so importing the module
 (e.g. from a notebook or the tests) does **not** start a simulation. You can
@@ -130,6 +147,11 @@ with a circular sampling footprint (default radius 1.5 m):
 | Pit_04_LongLintel | 56 | Lintel_2.4m |
 | Pit_05_ComboSmall | 70 | Combo_1.2m_G600 |
 | Pit_06_ComboLarge | 85 | Combo_2.4m_G900 |
+
+Each entry also takes an optional **`blockage`** (0.0 = clear, 1.0 = fully
+blocked) that derates the inlet's clear area and perimeter — e.g. add
+`"blockage": 0.5` to a pit to model a half-clogged grate. It defaults to 0.0 and
+is shown in the results table.
 
 `domain.evolve(yieldstep=10, finaltime=120)` runs the simulation, then
 `print_summary()` prints the steady-state table and dumps the CSVs.

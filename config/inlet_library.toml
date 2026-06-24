@@ -1,0 +1,32 @@
+# Inlet asset catalogue — mirrors the built-in INLET_LIBRARY.
+# Load with:  python stormwater_inlet_simulation.py --library config/inlet_library.toml
+#
+# One [inlets.<name>] table per standard inlet. clear_area is the clear opening
+# area (m^2) and effective_perimeter is the weir perimeter (m). Per-inlet
+# clogging is set per placement (see pit_placements.toml), not here.
+
+[inlets.Grate_600x600]
+clear_area = 0.21
+effective_perimeter = 2.40
+
+[inlets.Grate_900x900]
+clear_area = 0.48
+effective_perimeter = 3.60
+
+# NB: inlet names containing "." must be quoted, else TOML reads them as
+# nested tables (e.g. inlets.Lintel_1.2m -> inlets > Lintel_1 > 2m).
+[inlets."Lintel_1.2m"]
+clear_area = 0.18
+effective_perimeter = 1.20
+
+[inlets."Lintel_2.4m"]
+clear_area = 0.36
+effective_perimeter = 2.40
+
+[inlets."Combo_1.2m_G600"]
+clear_area = 0.39
+effective_perimeter = 3.00
+
+[inlets."Combo_2.4m_G900"]
+clear_area = 0.84
+effective_perimeter = 5.10

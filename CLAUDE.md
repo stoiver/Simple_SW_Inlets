@@ -17,6 +17,10 @@ The two scripts are coupled only by the CSV schema (see below), not by imports.
 # Run the simulation (requires a working ANUGA install; regenerates the hydrograph_*.csv and .sww files)
 python stormwater_inlet_simulation.py
 
+# ...optionally driven by TOML config instead of the built-in defaults
+python stormwater_inlet_simulation.py --library config/inlet_library.toml --placements config/pit_placements.toml
+# (also: --finaltime SECONDS, --yieldstep SECONDS)
+
 # Launch the hydrograph viewer GUI (needs a display / X server for Tkinter)
 python stormwater_inlet_viewer.py
 
@@ -36,7 +40,9 @@ The hydraulics live in an asset-library + operator design:
 - `Depth_driven_parallel_inlet_operator` is the MPI-safe sibling (subclasses `anuga.parallel.parallel_inlet_operator.Parallel_Inlet_operator`, shares the same mixin). On a distributed domain `get_average_depth()` is per-subdomain (local), so it uses the collective `get_global_average_depth()`/`get_global_*` reductions. Because `Parallel_Inlet_operator.__call__` runs `update_Q` on the **master rank only** (then broadcasts the volume), the global depth is sampled collectively in `__call__` (all ranks) and stashed for the master-only `update_Q` — calling a collective inside `update_Q` would deadlock. `Stormwater_inlet_network.add_inlet` auto-selects serial vs parallel from `domain.parallel` and forwards `**operator_kwargs` (e.g. `master_proc`/`procs`). The parallel import is guarded (`_HAVE_PARALLEL`) so the module still imports without ANUGA's parallel stack. See `docs/HYDRAULICS.md` → "Running in parallel (MPI)".
 - `Stormwater_inlet_network` registers inlets, building a small circular `anuga.Region(center=[x,y], radius=...)` footprint per pit (default radius 1.5 m), owns the per-asset capture logs, and exposes `to_dataframe()` for export. To inspect ANUGA's `Inlet_operator`/`Inlet` API, see `/home/steve/anuga_core/anuga/structures/`.
 
-Runtime flow (under `if __name__ == "__main__"`, via `run_experiment()`): `build_domain()` makes a 100×20 m domain via `create_domain_from_regions`, sets a 1% slope elevation, dry initial stage, Dirichlet inflow on `left`, Transmissive `right`, Reflective walls; `build_network()` places the 6 `PIT_PLACEMENTS` down the channel centerline; `domain.evolve(yieldstep=10, finaltime=120)`; then `print_summary()` prints a table and dumps per-inlet CSVs.
+Config can come from TOML instead of the in-module defaults: `load_inlet_library(path)` returns a `{name: Inlet_specification}` catalogue from `[inlets.<name>]` tables (quote names containing `.`, e.g. `[inlets."Lintel_1.2m"]`, or TOML reads them as nested tables), and `load_pit_placements(path)` returns a list of placement dicts from `[[pits]]` tables (required `id/x/y/spec`, optional `radius/blockage`). `Stormwater_inlet_network(domain, library=...)` and `build_network(..., library=...)` accept a loaded catalogue; `run_experiment(library_path=, placements_path=)` and the `--library/--placements` CLI flags wire them in. Example files live in `config/` and mirror the built-ins.
+
+Runtime flow (under `if __name__ == "__main__"`, via `run_experiment()`): `build_domain()` makes a 100×20 m domain via `create_domain_from_regions`, sets a 1% slope elevation, dry initial stage, Dirichlet inflow on `left`, Transmissive `right`, Reflective walls; `build_network()` places the 6 `PIT_PLACEMENTS` down the channel centerline (each entry takes an optional per-asset `blockage` 0.0–1.0, default 0.0, passed through to `add_inlet`/`Inlet_specification`); `domain.evolve(yieldstep=10, finaltime=120)`; then `print_summary()` prints a table and dumps per-inlet CSVs.
 
 ### Key physical constants / knobs
 - `USE_MAX_DEPTH` (module flag, default True): drive the capture law from the max ponded depth over the inlet footprint vs the region average. The serial operator takes the local max; the parallel operator reduces a global max via `MPI.COMM_WORLD.allreduce(..., MPI.MAX)`.

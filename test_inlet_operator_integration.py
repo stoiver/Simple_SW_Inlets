@@ -24,7 +24,7 @@ import pytest
 
 import anuga
 
-import stormwater_inlet_simulation as sim
+import stormwater_inlets as sim
 
 OP = sim.Depth_driven_inlet_operator
 # HEC-22 metric coefficients (the operator defaults); asserting against these

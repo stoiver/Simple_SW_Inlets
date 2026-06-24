@@ -61,7 +61,7 @@ def _run_parallel():
 
     import anuga
     from anuga import distribute, myid, numprocs, finalize
-    import stormwater_inlet_simulation as sim
+    import stormwater_inlets as sim
 
     # Build the (flat, reflective-walled) pond on rank 0, then distribute it.
     if myid == 0:

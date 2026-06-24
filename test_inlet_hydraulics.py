@@ -1,4 +1,4 @@
-"""Unit tests for the importable parts of stormwater_inlet_simulation.
+"""Unit tests for the importable parts of stormwater_inlets.
 
 These exercise the pure asset/hydraulics logic and the CSV-contract columns
 without building a live ANUGA domain, so they run fast. Importing the module
@@ -16,7 +16,8 @@ import os
 
 import pytest
 
-import stormwater_inlet_simulation as sim
+import stormwater_inlets as sim
+import stormwater_inlet_simulation as sim_run   # the experiment script (PIT_PLACEMENTS)
 
 _CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
 
@@ -211,7 +212,7 @@ def test_shipped_config_files_match_builtins():
             sim.INLET_LIBRARY[name].effective_perimeter)
 
     pits = sim.load_pit_placements(os.path.join(_CONFIG_DIR, "pit_placements.toml"))
-    assert [p["id"] for p in pits] == [p["id"] for p in sim.PIT_PLACEMENTS]
+    assert [p["id"] for p in pits] == [p["id"] for p in sim_run.PIT_PLACEMENTS]
 
 
 def test_network_uses_provided_library():

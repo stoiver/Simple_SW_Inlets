@@ -21,7 +21,8 @@ capture law** driven by the local ponded depth. See
 
 | File | Purpose |
 |------|---------|
-| `stormwater_inlet_simulation.py` | Runs the 2-D shallow-water simulation; writes one `hydrograph_<Asset_ID>.csv` per inlet plus `sloped_inlet_experiment.sww`. |
+| `stormwater_inlets.py` | Reusable toolkit: inlet spec + catalogue, TOML loaders, the depth-driven capture operators (serial + MPI), and the inlet network manager. Imported by the simulation and the tests. |
+| `stormwater_inlet_simulation.py` | Runnable, follow-along experiment built on the toolkit; writes one `hydrograph_<Asset_ID>.csv` per inlet plus `sloped_inlet_experiment.sww`. |
 | `stormwater_inlet_viewer.py` | Standalone Tkinter dashboard that scans a folder for the hydrograph CSVs; a **View** menu switches between per-inlet diagnostic plots and a folder-combined hydrograph. |
 | `test_inlet_hydraulics.py` | Fast unit tests for the asset/hydraulics logic and the CSV schema (no ANUGA domain built). |
 | `test_inlet_operator_integration.py` | Integration tests that evolve/query a real ANUGA domain (capture law ↔ live `update_Q`, and mass balance). |
@@ -29,8 +30,8 @@ capture law** driven by the local ponded depth. See
 | `config/*.toml` | Example TOML config (inlet catalogue + pit placements) mirroring the built-in defaults. |
 | `docs/HYDRAULICS.md` | The capture-law theory, equations, transition depth, and references. |
 
-The two main scripts are coupled **only** by the CSV schema (below), not by
-imports.
+The simulation and the viewer are coupled **only** by the CSV schema (below),
+not by imports; the simulation imports the toolkit.
 
 ---
 
@@ -164,7 +165,8 @@ is shown in the results table.
 
 ## Code overview
 
-The hydraulics use an asset-library + operator design (see
+The reusable pieces live in **`stormwater_inlets.py`** (the simulation script
+imports them as `si`); the hydraulics use an asset-library + operator design (see
 [`docs/HYDRAULICS.md`](docs/HYDRAULICS.md) for the physics):
 
 - **`Inlet_specification`** — geometry of a standard inlet (`clear_area`,

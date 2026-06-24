@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-A two-script ANUGA hydrodynamic experiment that models stormwater inlets (pits/grates/lintels) on a sloping surface-flow plane, plus a Tkinter GUI for inspecting the resulting hydrographs.
+An ANUGA hydrodynamic experiment that models stormwater inlets (pits/grates/lintels) on a sloping surface-flow plane, plus a Tkinter GUI for inspecting the resulting hydrographs.
 
-- `stormwater_inlet_simulation.py` — runs the 2D shallow-water simulation and writes one `hydrograph_<Asset_ID>.csv` per inlet, plus `sloped_inlet_experiment.sww`.
-- `stormwater_inlet_viewer.py` — standalone Tkinter dashboard that scans a folder for those CSVs and renders four diagnostic subplots per inlet.
+- `stormwater_inlets.py` — the reusable **toolkit/library**: inlet spec + catalogue, TOML loaders, the depth-driven capture operators (serial + MPI), and the inlet network manager. No experiment-specific setup; imported by the simulation script and the tests.
+- `stormwater_inlet_simulation.py` — a runnable, follow-along **experiment script** built on the toolkit: defines the specific domain (`build_domain`) and `PIT_PLACEMENTS`, evolves, and writes one `hydrograph_<Asset_ID>.csv` per inlet plus `sloped_inlet_experiment.sww`.
+- `stormwater_inlet_viewer.py` — standalone Tkinter dashboard that scans a folder for those CSVs and renders the diagnostic plots.
 
-The two scripts are coupled only by the CSV schema (see below), not by imports.
+The simulation script and the viewer are coupled only by the CSV schema (see below), not by imports; the simulation script imports the toolkit.
 
 ## Commands
 
@@ -32,15 +33,18 @@ Tests use **pytest** (plain functions, `assert`, `pytest.approx`, `@pytest.mark.
 
 ## Architecture
 
-### Simulation script
-The hydraulics live in an asset-library + operator design:
+### Toolkit module (`stormwater_inlets.py`)
+The hydraulics live in an asset-library + operator design (all reusable, no experiment-specific setup):
 
 - `Inlet_specification` holds geometry (`clear_area`, `effective_perimeter`) and a `blockage_factor`; `operational_area`/`operational_perimeter` derate the geometry by blockage. `INLET_LIBRARY` is the catalog of named standard inlet types keyed by spec string.
 - `Depth_driven_inlet_operator` is the core. It must subclass the Inlet_operator **class** from `anuga.structures.inlet_operator` — note `anuga.Inlet_operator` (the top-level name) is a factory *function* and is **not** subclassable. It overrides `update_Q(t)` to return the capture discharge as a **negative** value (water leaving the domain), computed from the inlet's ponded depth — `_sample_depth()` returns the **max** over the footprint when the operator's `use_max_depth` argument is True (default from the module `USE_MAX_DEPTH` constant), else the region average (`get_average_depth()`) — via a **dual-regime capture law**: weir flow (`C_w * P * depth^1.5`) below a precomputed transition depth `d_trans`, orifice flow (`C_o * A * sqrt(2g*depth)`) above it. The capture law + hydrograph logging are factored into a shared `_Depth_driven_capture_mixin`: pure `@staticmethod`s `transition_depth(A, P, C_w, C_o, g)` and `capture_discharge(depth, A, P, C_w, C_o, g, d_trans)` (unit-testable without an ANUGA domain), plus `_capture_Q`/`_log_capture` helpers. `d_trans = (C_o*A*sqrt(2g)) / (C_w*P)` — the exponent-1 weir/orifice crossover (an earlier `**(2/3)` was wrong: it made the law discontinuous and non-monotonic). The parent `Inlet_operator` distributes the discharge over the inlet region and enforces mass balance — the operator no longer touches the stage array directly. `__call__` calls `super().__call__()` then logs a hydrograph record (using `applied_Q` for realised capture, and region-averaged momentum × `sqrt(area)` to estimate approach flow and hence bypass).
 - `Depth_driven_parallel_inlet_operator` is the MPI-safe sibling (subclasses `anuga.parallel.parallel_inlet_operator.Parallel_Inlet_operator`, shares the same mixin). On a distributed domain `get_average_depth()` is per-subdomain (local), so it uses the collective `get_global_average_depth()`/`get_global_*` reductions. Because `Parallel_Inlet_operator.__call__` runs `update_Q` on the **master rank only** (then broadcasts the volume), the global depth is sampled collectively in `__call__` (all ranks) and stashed for the master-only `update_Q` — calling a collective inside `update_Q` would deadlock. `Stormwater_inlet_network.add_inlet` auto-selects serial vs parallel from `domain.parallel` and forwards `**operator_kwargs` (e.g. `master_proc`/`procs`). The parallel import is guarded (`_HAVE_PARALLEL`) so the module still imports without ANUGA's parallel stack. See `docs/HYDRAULICS.md` → "Running in parallel (MPI)".
 - `Stormwater_inlet_network` registers inlets, building a small circular `anuga.Region(center=[x,y], radius=...)` footprint per pit (default radius 1.5 m), owns the per-asset capture logs, and exposes `to_dataframe()` for export. To inspect ANUGA's `Inlet_operator`/`Inlet` API, see `/home/steve/anuga_core/anuga/structures/`.
 
-Config can come from TOML instead of the in-module defaults: `load_inlet_library(path)` returns a `{name: Inlet_specification}` catalogue from `[inlets.<name>]` tables (quote names containing `.`, e.g. `[inlets."Lintel_1.2m"]`, or TOML reads them as nested tables), and `load_pit_placements(path)` returns a list of placement dicts from `[[pits]]` tables (required `id/x/y/spec`, optional `radius/blockage`). `Stormwater_inlet_network(domain, library=...)` and `build_network(..., library=...)` accept a loaded catalogue; `run_experiment(library_path=, placements_path=)` and the `--library/--placements` CLI flags wire them in. Example files live in `config/` and mirror the built-ins.
+Config can come from TOML instead of the built-in defaults: `load_inlet_library(path)` (in the toolkit) returns a `{name: Inlet_specification}` catalogue from `[inlets.<name>]` tables (quote names containing `.`, e.g. `[inlets."Lintel_1.2m"]`, or TOML reads them as nested tables), and `load_pit_placements(path)` returns a list of placement dicts from `[[pits]]` tables (required `id/x/y/spec`, optional `radius/blockage`). `Stormwater_inlet_network(domain, library=...)` accepts a loaded catalogue; the simulation script's `run_experiment(library_path=, placements_path=)` and the `--library/--placements` CLI flags wire them in. Example files live in `config/` and mirror the built-ins.
+
+### Simulation script (`stormwater_inlet_simulation.py`)
+A slim, follow-along experiment on top of the toolkit (`import stormwater_inlets as si`): `build_domain()` (the specific 100×20 m sloped domain), the `PIT_PLACEMENTS` list, plus `build_network`/`print_summary`/`run_experiment` and the argparse CLI. Holds no class definitions — those live in the toolkit — so it reads top-to-bottom as a usage example.
 
 Runtime flow (under `if __name__ == "__main__"`, via `run_experiment()`): `build_domain()` makes a 100×20 m domain via `create_domain_from_regions`, sets a 1% slope elevation, dry initial stage, Dirichlet inflow on `left`, Transmissive `right`, Reflective walls; `build_network()` places the 6 `PIT_PLACEMENTS` down the channel centerline (each entry takes an optional per-asset `blockage` 0.0–1.0, default 0.0, passed through to `add_inlet`/`Inlet_specification`); `domain.evolve(yieldstep=10, finaltime=120)`; then `print_summary()` prints a table and dumps per-inlet CSVs.
 

@@ -98,7 +98,7 @@ is always in the orifice regime.
 
 ## Where this lives in the code
 
-In `stormwater_inlet_simulation.py`:
+In `stormwater_inlets.py`:
 
 ```python
 class Depth_driven_inlet_operator(Inlet_operator):

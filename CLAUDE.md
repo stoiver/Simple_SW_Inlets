@@ -12,6 +12,8 @@ An ANUGA hydrodynamic experiment that models stormwater inlets (pits/grates/lint
 
 The simulation script and the viewer are coupled only by the CSV schema (see below), not by imports; the simulation script imports the toolkit.
 
+`docs/ANUGA_DRAINAGE_COMPARISON.md` analyses how this project relates to the `anuga_drainage` coupling package (a concrete diff of the two weir/orifice flux laws and whether to combine): same physics family, but different weir coefficient (~1.8×), depth- vs head-driven regime selection, and one-way capture vs two-way coupling.
+
 ## Commands
 
 ```bash

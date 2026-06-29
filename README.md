@@ -29,6 +29,7 @@ capture law** driven by the local ponded depth. See
 | `test_parallel_inlet_mass_balance.py` | MPI test: shells out to `mpiexec -np 2` and checks the parallel operator's global mass balance (skipped if MPI is unavailable). |
 | `config/*.toml` | Example TOML config (inlet catalogue + pit placements) mirroring the built-in defaults. |
 | `docs/HYDRAULICS.md` | The capture-law theory, equations, transition depth, and references. |
+| `docs/ANUGA_DRAINAGE_COMPARISON.md` | How this project relates to `anuga_drainage`, a concrete diff of the two flux laws, and whether to combine. |
 
 The simulation and the viewer are coupled **only** by the CSV schema (below),
 not by imports; the simulation imports the toolkit.
